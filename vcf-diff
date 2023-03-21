@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+
+import argparse
+import csv
+import json
+import os
+import sys
+
+def parse_header_id_lookup(id_lookup_path):
+    """
+    """
+    id_lookup = {}
+
+    with open(id_lookup_path, 'r') as f:
+        for line in f:
+            tag_id, name = line.strip().split(',')
+            id_lookup[tag_id] = name
+
+    return id_lookup
+    
+
+def parse_variant_info(info_str, header):
+    """
+    """
+    variant_info = {}
+    info_split = info_str.split(';')
+    for pair in info_split:
+        num_format = None
+        value_type = None
+        k, v = pair.split('=')
+        if k in header['info']:
+            if 'Number' in header['info'][k]:
+                num_format = header['info'][k]['Number']
+            if 'Type' in header['info'][k]:
+                value_type = header['info'][k]['Type']
+
+            values = v.split(',')
+            if num_format == '1':
+                if value_type == None or value_type in ['String', 'Flag']:
+                    variant_info[k] = v
+                elif value_type == 'Integer':
+                    variant_info[k] = int(v)
+                elif value_type == 'Float':
+                    variant_info[k] = float(v)
+            else:
+                if value_type == None or value_type in ['String', 'Flag']:
+                    variant_info[k] = values
+                elif value_type == 'Integer':
+                    variant_info[k] = list(map(int, values))
+                elif value_type == 'Float':
+                    variant_info[k] = list(map(float, values))
+            
+    return variant_info
+
+
+def parse_variant_format(format_str, format_fields, header):
+    """
+    """
+    variant_format = {}
+    format_split = format_str.split(':')
+    if len(format_split) != len(format_fields):
+        print('Error parsing format')
+        exit(-1)
+    for idx, format_field in enumerate(format_fields):
+        if format_field in header['format']:
+            if 'Number' in header['format'][format_field]:
+                num_format = header['format'][format_field]['Number']
+            if 'Type' in header['format'][format_field]:
+                value_type = header['format'][format_field]['Type']
+        variant_format[format_field] = format_split[idx]
+
+    return variant_format
+
+
+def parse_header_tag(tag, id_lookup={}):
+    """
+    """
+    tag_id = None
+    tag_contents = [tag.removeprefix('<').removesuffix('>')]
+    tag_split = csv.reader(tag_contents, quotechar='"', delimiter=',')
+    parsed_tag = {}
+    tag_id = None
+    for line in tag_split:
+        for idx, pair in enumerate(line):
+            if '=' not in pair:
+                pass
+        for idx, pair in enumerate(line):
+            if '=' not in pair:
+                continue
+            else:
+                k, v = pair.split('=')
+                if k == 'Description':
+                    continue
+                else:
+                    if k == 'ID':
+                        tag_id = v
+                    if k in ['ID', 'Number', 'Type']:
+                        parsed_tag[k] = v
+        if tag_id in id_lookup:
+            parsed_tag['Name'] = id_lookup[tag_id]
+
+    return tag_id, parsed_tag
+
+
+def parse_vcf(vcf_path, info_id_lookup={}, format_id_lookup={}):
+    """
+    """
+    vcf = {'variants': {}}
+    header = {
+        'info': {},
+        'format': {},
+    }
+    with open(vcf_path, 'r') as f:
+        for line in f:
+            if line.startswith('##'):
+                if line.startswith('##INFO'):
+                    info_tag = line.strip().removeprefix('##INFO=')
+                    info_id, info = parse_header_tag(info_tag, info_id_lookup)
+                    header['info'][info_id] = info
+                elif line.startswith('##FORMAT'):
+                    format_tag = line.strip().removeprefix('##FORMAT=')
+                    format_id, fmt = parse_header_tag(format_tag, format_id_lookup)
+                    header['format'][format_id] = fmt
+            elif line.startswith('#'):
+                continue
+            else:
+                line_split = line.strip().split('\t')
+                variant = {}
+                variant['chrom'] = line_split[0]
+                variant['pos'] = int(line_split[1])
+                variant['id'] = line_split[2]
+                variant['ref'] = line_split[3]
+                variant['alt'] = line_split[4]
+                variant['qual'] = float(line_split[5])
+                variant['filter'] = line_split[6]
+                variant_info = parse_variant_info(line_split[7], header)
+                variant['info'] = variant_info
+                variant_format_fields = line_split[8].split(':')
+                variant_format_values = parse_variant_format(line_split[9], variant_format_fields, header)
+                variant['format'] = variant_format_values
+                variant_id = ':'.join([
+                    variant['chrom'],
+                    str(variant['pos']),
+                    variant['ref'],
+                    variant['alt'],
+                ])
+                vcf['variants'][variant_id] = variant
+
+    vcf['header'] = header
+
+    return vcf
+
+
+def compare_vcf(ref, test):
+    """
+    """
+    diff = {}
+
+    return diff
+
+
+def main(args):
+    if not (os.path.exists(args.ref) and os.path.exists(args.test)):
+        print("Invalid inputs:")
+        print("ref:", args.ref)
+        print("test:", args.test)
+        exit(-1)
+
+    info_id_lookup = {}
+    if args.info_id_lookup and os.path.exists(args.info_id_lookup):
+        info_id_lookup = parse_header_id_lookup(args.info_id_lookup)
+
+    format_id_lookup = {}
+    if args.format_id_lookup and os.path.exists(args.format_id_lookup):
+        format_id_lookup = parse_header_id_lookup(args.format_id_lookup)
+
+    ref_vcf = parse_vcf(args.ref, info_id_lookup, format_id_lookup)
+    # ref_vcf.pop('header')
+    num_ref_variants = len(ref_vcf['variants'])
+    test_vcf = parse_vcf(args.test, info_id_lookup, format_id_lookup)
+    num_test_variants = len(test_vcf['variants'])
+
+    output_fieldnames = [
+        'variant_id',
+        'feature',
+        'ref_vcf',
+        'test_vcf',
+        'equal',
+    ]
+    writer = csv.DictWriter(sys.stdout, fieldnames=output_fieldnames, quoting=csv.QUOTE_MINIMAL, dialect='unix')
+    writer.writeheader()
+    num_variants_comparison = {
+        'variant_id': 'NA',
+        'feature': 'num_variants',
+        'ref_vcf':  num_ref_variants,
+        'test_vcf': num_test_variants,
+        'equal': num_ref_variants == num_test_variants,
+    }
+    if args.all_comparisons or num_variants_comparison['equal'] == False:
+        writer.writerow(num_variants_comparison)
+
+    for variant_id in ref_vcf['variants']:
+        exists_in_ref_vcf = True
+        exists_in_test_vcf = variant_id in test_vcf['variants']
+        variant_present_comparison = {
+            'variant_id': variant_id,
+            'feature': 'variant/present',
+            'ref_vcf':  exists_in_ref_vcf,
+            'test_vcf': exists_in_test_vcf,
+            'equal': exists_in_ref_vcf == exists_in_test_vcf,
+        }
+        if args.all_comparisons or variant_present_comparison['equal'] == False:
+            writer.writerow(variant_present_comparison)
+
+        if exists_in_test_vcf:
+            for info_tag in ref_vcf['variants'][variant_id]['info']:
+                ref_info_value = ref_vcf['variants'][variant_id]['info'][info_tag]
+                test_info_value = None
+                if info_tag in test_vcf['variants'][variant_id]['info']:
+                    test_info_value = test_vcf['variants'][variant_id]['info'][info_tag]
+                info_values_equal = ref_info_value == test_info_value
+                info_value_comparison = {
+                    'variant_id': variant_id,
+                    'feature': '/'.join(['info', info_tag]),
+                    'ref_vcf':  ref_info_value,
+                    'test_vcf': test_info_value,
+                    'equal': ref_info_value == test_info_value,
+                }
+                if args.all_comparisons or info_value_comparison['equal'] == False:
+                    writer.writerow(info_value_comparison)
+
+            for format_tag in ref_vcf['variants'][variant_id]['format']:
+                ref_format_value = ref_vcf['variants'][variant_id]['format'][format_tag]
+                test_format_value = None
+                if format_tag in test_vcf['variants'][variant_id]['format']:
+                    test_format_value = test_vcf['variants'][variant_id]['format'][format_tag]
+                format_values_equal = ref_format_value == test_format_value
+                format_value_comparison = {
+                    'variant_id': variant_id,
+                    'feature': '/'.join(['format', format_tag]),
+                    'ref_vcf':  ref_format_value,
+                    'test_vcf': test_format_value,
+                    'equal': ref_format_value == test_format_value,
+                }
+                if args.all_comparisons or format_value_comparison['equal'] == False:
+                    writer.writerow(format_value_comparison)
+
+    for variant_id in test_vcf['variants']:
+        exists_in_ref_vcf = variant_id in ref_vcf['variants']
+        if not exists_in_ref_vcf:
+            print(','.join(map(str, [variant_id, 'variant/present', False, True, False])))
+    diff = compare_vcf(ref_vcf, test_vcf)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-i', '--info-id-lookup')
+    parser.add_argument('-f', '--format-id-lookup')
+    parser.add_argument('-a', '--all-comparisons', action='store_true')
+    parser.add_argument('ref')
+    parser.add_argument('test')
+    args = parser.parse_args()
+    main(args)

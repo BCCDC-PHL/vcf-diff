@@ -61,13 +61,31 @@ def parse_variant_format(format_str, format_fields, header):
     if len(format_split) != len(format_fields):
         print('Error parsing format')
         exit(-1)
+
     for idx, format_field in enumerate(format_fields):
+        num_format = None
+        value_type = None
         if format_field in header['format']:
             if 'Number' in header['format'][format_field]:
                 num_format = header['format'][format_field]['Number']
             if 'Type' in header['format'][format_field]:
                 value_type = header['format'][format_field]['Type']
-        variant_format[format_field] = format_split[idx]
+
+        raw_values = format_split[idx].split(',')
+        if num_format == '1':
+            if value_type == None or value_type in ['String', 'Flag']:
+                variant_format[format_field] = raw_values[0]
+            elif value_type == 'Integer':
+                variant_format[format_field] = int(raw_values[0])
+            elif value_type == 'Float':
+                variant_format[format_field] = float(raw_values[0])
+        else:
+            if value_type == None or value_type in ['String', 'Flag']:
+                variant_format[format_field] = raw_values
+            elif value_type == 'Integer':
+                variant_format[format_field] = list(map(int, raw_values))
+            elif value_type == 'Float':
+                variant_format[format_field] = list(map(float, raw_values))
 
     return variant_format
 

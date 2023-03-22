@@ -206,7 +206,9 @@ def main(args):
         'equal',
     ]
     writer = csv.DictWriter(sys.stdout, fieldnames=output_fieldnames, quoting=csv.QUOTE_MINIMAL, dialect='unix')
-    writer.writeheader()
+    if not args.no_header:
+        writer.writeheader()
+
     num_variants_comparison = {
         'variant_id': 'NA',
         'feature': 'num_variants',
